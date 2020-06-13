@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "nlp_pytorch"
+version = "0.1.0"
+description = ""
+authors = ["David Bradford <david.bradford@mongodb.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/..."
+
+[tool.poetry.scripts]
+cli = 'nlp_pytorch.cli:main'
+
+[tool.poetry.dependencies]
+python = "^3.7"
+Click = "^7.0"
+numpy = "^1.18.4"
+pandas = "^1.0.3"
+scikit-learn = "^0.23.0"
+torch = "^1.0.2"
+torchvision = "^0.6.0"
+ipython = "^7.15.0"
+spacy = "^2.2.4"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.3"
+pytest-black = "^0.3.7"
+pytest-cov = "^2.8"
+pytest-flake8 = "^1.0"
+pytest-mypy = "^0.4"
+pytest-pydocstyle = "^2.0"
+pytest-sugar = "^0.9.2"
+pytest-isort = "^0.3.1"
+
+[tool.black]
+line-length = 100
+target-version = ['py37']
