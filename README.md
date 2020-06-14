@@ -1,10 +1,4 @@
-# nlp_pytorch
+# Natural Language Processing with PyTorch
 
+Working through Natual Langauge Processing with PyTorch.
 
-## Testing
-
-Testing is done via pytest.
-
-```
-$ poetry run pytest
-```
