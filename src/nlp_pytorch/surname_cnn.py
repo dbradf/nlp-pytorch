@@ -1,78 +1,70 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
-import torch
-from torch.nn import Module, Linear, CrossEntropyLoss
-from torch.nn.functional import relu, softmax, dropout
+from torch.nn import Module, Sequential, Conv1d, ELU, Linear, CrossEntropyLoss
+from torch.nn.functional import softmax
 from torch.optim import Adam
 
-from nlp_pytorch.data.base_dataset import SplitDataset
+import torch
+
 from nlp_pytorch.data.vocab import Vocabulary
+from nlp_pytorch.surname import SurnameDataset, compute_accuracy
 from nlp_pytorch.train import make_train_state, train
 
 
 class SurnameVectorizer(object):
-    def __init__(self, surname_vocab: Vocabulary, national_vocab: Vocabulary) -> None:
+    def __init__(
+        self, surname_vocab: Vocabulary, national_vocab: Vocabulary, max_surname_length: int
+    ) -> None:
         self.surname_vocab = surname_vocab
         self.nationality_vocab = national_vocab
+        self.max_surname_length = max_surname_length
 
     def vectorize(self, surname: str):
-        return self.surname_vocab.one_hot_encoding(surname)
+        one_hot_matrix_size = (len(self.surname_vocab), self.max_surname_length)
+        one_hot_matrix = np.zeros(one_hot_matrix_size, dtype=np.float32)
+
+        for pos_idx, character in enumerate(surname):
+            ch_idx = self.surname_vocab.lookup_token(character)
+            one_hot_matrix[ch_idx][pos_idx] = 1
+
+        return one_hot_matrix
 
     @classmethod
     def from_dataframe(cls, surname_df: pd.DataFrame) -> SurnameVectorizer:
         surname_vocab = Vocabulary(unk_token="@")
         nationality_vocab = Vocabulary(add_unk=False)
+        max_surname_length = 0
 
         for index, row in surname_df.iterrows():
+            max_surname_length = max(max_surname_length, len(row.surname))
             for letter in row.surname:
                 surname_vocab.add_token(letter)
             nationality_vocab.add_token(row.nationality)
 
-        return cls(surname_vocab, nationality_vocab)
+        return cls(surname_vocab, nationality_vocab, max_surname_length)
 
 
-class SurnameDataset(SplitDataset):
-    def __init__(self, dataframe, vectorizer) -> None:
-        super().__init__(dataframe, vectorizer)
-
-        class_counts = dataframe.nationality.value_counts().to_dict()
-
-        def sort_key(item):
-            return vectorizer.nationality_vocab.lookup_token(item[0])
-
-        sorted_counts = sorted(class_counts.items(), key=sort_key)
-        frequencies = [count for _, count in sorted_counts]
-        self.class_weights = 1.0 / torch.tensor(frequencies, dtype=torch.float32)
-
-    @classmethod
-    def load_dataset_and_make_vectorizer(
-        cls, surname_csv: str, create_vectorizer=SurnameVectorizer.from_dataframe
-    ) -> SurnameDataset:
-        surname_df = pd.read_csv(surname_csv)
-        return cls(surname_df, create_vectorizer(surname_df))
-
-    def __getitem__(self, index: int):
-        row = self._target_df.iloc[index]
-        surname_vector = self.vectorizer.vectorize(row.surname)
-        nationality_index = self.vectorizer.nationality_vocab.lookup_token(row.nationality)
-
-        return {"x_data": surname_vector, "y_target": nationality_index}
-
-    def __len__(self) -> int:
-        return self._target_size
-
-
-class SurnameClassifier(Module):
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int) -> None:
+class SurnameCnnClassifier(Module):
+    def __init__(self, initial_num_channels: int, num_classes: int, num_channels: int) -> None:
         super().__init__()
 
-        self.fc1 = Linear(input_dim, hidden_dim)
-        self.fc2 = Linear(hidden_dim, output_dim)
+        self.convnet = Sequential(
+            Conv1d(in_channels=initial_num_channels, out_channels=num_channels, kernel_size=3),
+            ELU(),
+            Conv1d(in_channels=num_channels, out_channels=num_channels, kernel_size=3, stride=2),
+            ELU(),
+            Conv1d(in_channels=num_channels, out_channels=num_channels, kernel_size=3, stride=2),
+            ELU(),
+            Conv1d(in_channels=num_channels, out_channels=num_channels, kernel_size=3),
+            ELU(),
+        )
+        self.fc = Linear(num_channels, num_classes)
 
     def forward(self, x_in, apply_activator: bool = False):
-        intermediate_vector = relu(self.fc1(x_in))
-        prediction_vector = self.fc2(dropout(intermediate_vector, p=0.5))
+        features = self.convnet(x_in).squeeze(dim=2)
+        prediction_vector = self.fc(features)
 
         if apply_activator:
             prediction_vector = softmax(prediction_vector, dim=1)
@@ -82,7 +74,7 @@ class SurnameClassifier(Module):
 
 def predict_nationality(name, classifier, vectorizer):
     vectorized_name = vectorizer.vectorize(name)
-    vectorized_name = torch.tensor(vectorized_name).view(1, -1)
+    vectorized_name = torch.tensor(vectorized_name).unsqueeze(0)
     result = classifier(vectorized_name, apply_activator=True)
 
     probability_values, indices = result.max(dim=1)
@@ -94,15 +86,10 @@ def predict_nationality(name, classifier, vectorizer):
     return {"nationality": predicted_nationality, "probability": probability_value}
 
 
-def compute_accuracy(y_pred, y_target):
-    _, y_pred_indices = y_pred.max(dim=1)
-    n_correct = torch.eq(y_pred_indices, y_target).sum().item()
-    return n_correct / len(y_pred_indices) * 100
-
-
-def main(batch_size: int = 128, num_epochs: int = 100, hidden_dim: int = 300):
+def main(batch_size: int = 128, num_epochs: int = 100, hidden_dim: int = 100):
     args = {
         "hidden_dim": hidden_dim,
+        "num_channels": 256,
         "surname_csv": "data/surnames_with_splits.csv",
         "save_dir": "model_storage/yelp/",
         "model_state_file": "model.pth",
@@ -121,13 +108,15 @@ def main(batch_size: int = 128, num_epochs: int = 100, hidden_dim: int = 300):
     args["device"] = torch.device("cuda:0" if args["cuda"] else "cpu")
     print(args)
 
-    dataset = SurnameDataset.load_dataset_and_make_vectorizer(args["surname_csv"])
+    dataset = SurnameDataset.load_dataset_and_make_vectorizer(
+        args["surname_csv"], SurnameVectorizer.from_dataframe
+    )
     vectorizer = dataset.vectorizer
 
-    classifier = SurnameClassifier(
-        input_dim=len(vectorizer.surname_vocab),
-        hidden_dim=args["hidden_dim"],
-        output_dim=len(vectorizer.nationality_vocab),
+    classifier = SurnameCnnClassifier(
+        initial_num_channels=len(vectorizer.surname_vocab),
+        num_classes=len(vectorizer.nationality_vocab),
+        num_channels=args["num_channels"],
     )
     classifier = classifier.to(args["device"])
 
