@@ -11,6 +11,7 @@ class Vocabulary(object):
         token_to_idx: Optional[Dict[str, int]] = None,
         add_unk: bool = True,
         unk_token: str = "<UNK>",
+        mask_token: str = "<MASK>",
     ) -> None:
         if token_to_idx is None:
             token_to_idx = {}
@@ -20,7 +21,9 @@ class Vocabulary(object):
 
         self._add_unk = add_unk
         self._unk_token = unk_token
+        self._mask_token = mask_token
 
+        self.mask_index = self.add_token(mask_token)
         self.unk_index = -1
         if add_unk:
             self.unk_index = self.add_token(unk_token)
@@ -30,6 +33,7 @@ class Vocabulary(object):
             "token_to_idx": self._token_to_idx,
             "add_unk": self._add_unk,
             "unk_token": self._unk_token,
+            "mask_token": self._mask_token,
         }
 
     @classmethod

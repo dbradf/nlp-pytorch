@@ -20,6 +20,7 @@ torch = "^1.0.2"
 torchvision = "^0.6.0"
 ipython = "^7.15.0"
 spacy = "^2.2.4"
+annoy = "^1.16.3"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.3"
@@ -30,6 +31,8 @@ pytest-mypy = "^0.4"
 pytest-pydocstyle = "^2.0"
 pytest-sugar = "^0.9.2"
 pytest-isort = "^0.3.1"
+jupyterlab = "^2.1.4"
+black = {version = "^19.10b0", allow-prereleases = true}
 
 [tool.black]
 line-length = 100
