@@ -313,7 +313,8 @@ def main():
 
     if torch.cuda.is_available():
         args['cuda'] = True
-    args['device'] = torch.device("cuda" if args["cuda"] else "cpu")
+    args['device'] = torch.device("cuda:0" if args["cuda"] else "cpu")
+    print(args)
 
     dataset = ReviewDataset.load_dataset_and_make_vectorizer(args["review_csv"])
     vectorizer = dataset.get_vectorizer()
