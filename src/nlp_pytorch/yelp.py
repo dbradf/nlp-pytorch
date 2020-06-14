@@ -9,11 +9,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from torch.utils.data import Dataset, DataLoader
-
-TRAIN = 'train'
-TEST = 'test'
-VAL = 'val'
+from nlp_pytorch.data.base_dataset import TRAIN, TEST, VAL, SplitDataset
+from nlp_pytorch.data.vocab import Vocabulary
+from nlp_pytorch.train import train, make_train_state
 
 
 def preprocess_test(text):
@@ -38,71 +36,17 @@ def split_data(review_subset, train_proportion, val_proportion, test_proportion)
         n_test = int(test_proportion * n_total)
 
         for item in item_list[:n_train]:
-            item['split'] = TRAIN
+            item["split"] = TRAIN
 
-        for item in item_list[n_train:n_train+n_val]:
-            item['split'] = VAL
+        for item in item_list[n_train : n_train + n_val]:
+            item["split"] = VAL
 
-        for item in item_list[n_train+n_val:n_train+n_val+n_test]:
-            item['split'] = TEST
+        for item in item_list[n_train + n_val : n_train + n_val + n_test]:
+            item["split"] = TEST
 
         final_list.extend(item_list)
 
     return pd.DataFrame(final_list)
-
-
-class Vocabulary(object):
-    def __init__(self, token_to_idx=None, add_unk=True, unk_token="<UNK>"):
-        if token_to_idx is None:
-            token_to_idx = {}
-        self._token_to_idx = token_to_idx
-
-        self._idx_to_token = {idx: token for token, idx in self._token_to_idx.items()}
-
-        self._add_unk = add_unk
-        self._unk_token = unk_token
-
-        self.unk_index = -1
-        if add_unk:
-            self.unk_index = self.add_token(unk_token)
-
-    def to_serializable(self):
-        return {
-            'token_to_idx': self._token_to_idx,
-            'add_unk': self._add_unk,
-            'unk_token': self._unk_token,
-        }
-
-    @classmethod
-    def from_serializable(cls, contents):
-        return cls(**contents)
-
-    def add_token(self, token):
-        if token in self._token_to_idx:
-            index = self._token_to_idx[token]
-        else:
-            index = len(self._token_to_idx)
-            self._token_to_idx[token] = index
-            self._idx_to_token[index] = token
-
-        return index
-
-    def lookup_token(self, token):
-        if self._add_unk:
-            return self._token_to_idx.get(token, self.unk_index)
-        else:
-            return self._token_to_idx[token]
-
-    def lookup_index(self, index):
-        if index not in self._idx_to_token:
-            raise KeyError(f"the index ({index}) is not in the vocabulary")
-        return self._idx_to_token[index]
-
-    def __str__(self):
-        return f"<Vocabulary(size={len(self)}"
-
-    def __len__(self):
-        return len(self._token_to_idx)
 
 
 class ReviewVectorizer(object):
@@ -111,13 +55,7 @@ class ReviewVectorizer(object):
         self.rating_vocab = rating_vocab
 
     def vectorize(self, review):
-        one_hot = np.zeros(len(self.review_vocab), dtype=np.float32)
-
-        for token in review.split(' '):
-            if token not in string.punctuation:
-                one_hot[self.review_vocab.lookup_token(token)] = 1
-
-        return one_hot
+        return self.review_vocab.one_hot_encoding(review.split(" "))
 
     @classmethod
     def from_dataframe(cls, review_df, cutoff=25):
@@ -147,32 +85,14 @@ class ReviewVectorizer(object):
 
     def to_serializable(self):
         return {
-            'review_vocab': self.review_vocab.to_serializeable(),
-            'rating_vocab': self.rating_vocab.to_serializeable(),
+            "review_vocab": self.review_vocab.to_serializeable(),
+            "rating_vocab": self.rating_vocab.to_serializeable(),
         }
 
 
-class ReviewDataset(Dataset):
+class ReviewDataset(SplitDataset):
     def __init__(self, review_df, vectorizer):
-        self.review_df = review_df
-        self._vectorizer = vectorizer
-
-        self.train_df = self.review_df[self.review_df.split == TRAIN]
-        self.train_size = len(self.train_df)
-
-        self.val_df = self.review_df[self.review_df.split == VAL]
-        self.val_size = len(self.val_df)
-
-        self.test_df = self.review_df[self.review_df.split == TEST]
-        self.test_size = len(self.test_df)
-
-        self._lookup_dict = {
-            TRAIN: (self.train_df, self.train_size),
-            VAL: (self.val_df, self.val_size),
-            TEST: (self.test_df, self.test_size),
-        }
-
-        self.set_split(TRAIN)
+        super().__init__(review_df, vectorizer)
 
     @classmethod
     def load_dataset_and_make_vectorizer(cls, review_csv):
@@ -182,34 +102,14 @@ class ReviewDataset(Dataset):
         review_df = split_data(review_df, 0.70, 0.15, 0.15)
         return cls(review_df, ReviewVectorizer.from_dataframe(review_df))
 
-    def get_vectorizer(self):
-        return self._vectorizer
-
-    def set_split(self, split=TRAIN):
-        self._target_split = split
-        self._target_df, self._target_size = self._lookup_dict[split]
-
-    def __len__(self):
-        return self._target_size
-
     def __getitem__(self, index):
         row = self._target_df.iloc[index]
-        review_vector = self._vectorizer.vectorize(row.review)
-        rating_index = self._vectorizer.rating_vocab.lookup_token(row.rating)
-        return {'x_data': review_vector, 'y_target': rating_index}
+        review_vector = self.vectorizer.vectorize(row.review)
+        rating_index = self.vectorizer.rating_vocab.lookup_token(row.rating)
+        return {"x_data": review_vector, "y_target": float(rating_index)}
 
-    def get_num_batches(self, batch_size):
-        return len(self) // batch_size
-
-
-def generate_batches(dataset, batch_size, shuffle=True, drop_last=True, device="cpu"):
-    dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, drop_last=drop_last)
-
-    for data_dict in dataloader:
-        out_data_dict = {}
-        for name, tensor in data_dict.items():
-            out_data_dict[name] = data_dict[name].to(device)
-        yield out_data_dict
+    def __len__(self) -> int:
+        return self._target_size
 
 
 class ReviewClassifier(nn.Module):
@@ -217,23 +117,11 @@ class ReviewClassifier(nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(in_features=num_features, out_features=1)
 
-    def forward(self, x_in, apply_sigmoid=False):
+    def forward(self, x_in, apply_activator=False):
         y_out = self.fc1(x_in).squeeze()
-        if apply_sigmoid:
+        if apply_activator:
             y_out = F.sigmoid(y_out)
         return y_out
-
-
-def make_train_state():
-    return {
-        'epoch_index': 0,
-        'train_loss': [],
-        'train_acc': [],
-        'val_loss': [],
-        'val_acc': [],
-        'test_loss': -1,
-        'test_acc': -1
-    }
 
 
 def compute_accuracy(y_pred, y_target):
@@ -243,68 +131,15 @@ def compute_accuracy(y_pred, y_target):
     return n_correct / len(y_pred_indices) * 100
 
 
-def train(args, train_state, dataset, classifier, optimizer, loss_func):
-    for epoch_index in range(args['num_epochs']):
-        train_state["epoch_index"] = epoch_index
-
-        dataset.set_split(TRAIN)
-        batch_generator = generate_batches(dataset, batch_size=args["batch_size"], device=args["device"])
-        running_loss = 0.0
-        running_acc = 0.0
-        classifier.train()
-
-        for batch_index, batch_dict in enumerate(batch_generator):
-            optimizer.zero_grad()
-            y_pred = classifier(x_in=batch_dict['x_data'].float())
-
-            loss = loss_func(y_pred, batch_dict['y_target'].float())
-            loss_batch = loss.item()
-            running_loss += (loss_batch - running_loss) / (batch_index + 1)
-
-            loss.backward()
-
-            optimizer.step()
-
-            acc_batch = compute_accuracy(y_pred, batch_dict['y_target'])
-            running_acc += (acc_batch - running_acc) / (batch_index + 1)
-
-        train_state["train_loss"].append(running_loss)
-        train_state["train_acc"].append(running_acc)
-
-        print(f"Epoch {epoch_index} / {args['num_epochs']}")
-        print(train_state)
-
-        dataset.set_split(VAL)
-        batch_generator = generate_batches(dataset, batch_size=args["batch_size"], device=args["device"])
-        running_loss = 0.
-        running_acc = 0.
-        classifier.eval()
-
-        for batch_index, batch_dict in enumerate(batch_generator):
-            y_pred = classifier(x_in=batch_dict['x_data'].float())
-            loss = loss_func(y_pred, batch_dict['y_target'].float())
-            loss_batch = loss.item()
-            running_loss += (loss_batch - running_acc) / (batch_index + 1)
-
-            acc_batch = compute_accuracy(y_pred, batch_dict["y_target"])
-            running_acc += (acc_batch - running_acc) / (batch_index + 1)
-
-        print(f"Val Epoch {epoch_index}")
-        train_state['val_loss'].append(running_loss)
-        train_state['val_acc'].append(running_acc)
-
-        print(train_state)
-
-
-def main():
+def main(batch_size: int = 128, num_epochs: int = 100):
     args = {
         "review_csv": "data/yelp_reviews_lite.json",
         "save_dir": "model_storage/yelp/",
         "model_state_file": "model.pth",
         "vectorizer_file": "vectorizer.json",
         "learning_rate": 0.001,
-        "num_epochs": 100,
-        "batch_size": 128,
+        "num_epochs": num_epochs,
+        "batch_size": batch_size,
         "early_stopping_criteria": 5,
         "frequency_cutoff": 25,
         "cuda": False,
@@ -312,12 +147,12 @@ def main():
     train_state = make_train_state()
 
     if torch.cuda.is_available():
-        args['cuda'] = True
-    args['device'] = torch.device("cuda:0" if args["cuda"] else "cpu")
+        args["cuda"] = True
+    args["device"] = torch.device("cuda:0" if args["cuda"] else "cpu")
     print(args)
 
     dataset = ReviewDataset.load_dataset_and_make_vectorizer(args["review_csv"])
-    vectorizer = dataset.get_vectorizer()
+    vectorizer = dataset.vectorizer
 
     classifier = ReviewClassifier(num_features=len(vectorizer.review_vocab))
     classifier = classifier.to(args["device"])
@@ -325,7 +160,7 @@ def main():
     loss_func = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(classifier.parameters(), lr=args["learning_rate"])
 
-    train(args, train_state, dataset, classifier, optimizer, loss_func)
+    train(args, train_state, dataset, classifier, optimizer, loss_func, compute_accuracy)
 
     return {
         "train_state": train_state,
