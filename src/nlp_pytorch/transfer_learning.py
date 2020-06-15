@@ -175,9 +175,9 @@ class NewsClassifier(Module):
         return prediction_vector
 
 
-def predict_category(title, classifer, vectorizer, max_length):
+def predict_category(title, classifer, vectorizer, max_length, device):
     title = preprocess_text(title)
-    vectorized_title = torch.tensor(vectorizer.vectorize(title, vector_length=max_length))
+    vectorized_title = torch.tensor(vectorizer.vectorize(title, vector_length=max_length)).to(device)
     result = classifer(vectorized_title.unsqueeze(0), apply_activator=True)
     probability_values, indices = result.max(dim=1)
     predicated_category = vectorizer.category_vocab.lookup_index(indices.item())
@@ -233,7 +233,6 @@ def main(num_epochs: int = 100, batch_size: int = 128):
         pretrained_embeddings=torch.from_numpy(embeddings),
     )
     classifier = classifier.to(args["device"])
-    dataset.class_weights.to(args["device"])
     classifier.double()
 
     loss_func = CrossEntropyLoss()
