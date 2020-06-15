@@ -24,7 +24,7 @@ class CbowVectorizer(object):
         max_len = 0
         for index, row in cbow_df.iterrows():
             max_len = max(max_len, len(row.context.split(" ")))
-            for token in row.context.split(' '):
+            for token in row.context.split(" "):
                 cbow_vocab.add_token(token)
             cbow_vocab.add_token(row.target)
         return cls(cbow_vocab, max_len)
@@ -35,8 +35,8 @@ class CbowVectorizer(object):
             vector_length = len(indices)
 
         out_vector = np.zeros(self.max_vector_len, dtype=np.int64)
-        out_vector[:len(indices)] = indices
-        out_vector[len(indices):] = self.cbow_vocab.mask_index
+        out_vector[: len(indices)] = indices
+        out_vector[len(indices) :] = self.cbow_vocab.mask_index
 
         return out_vector
 
@@ -75,9 +75,7 @@ class CbowClassifier(Module):
         super().__init__()
 
         self.embedding = Embedding(
-            num_embeddings=vocabulary_size,
-            embedding_dim=embedding_size,
-            padding_idx=padding_idx
+            num_embeddings=vocabulary_size, embedding_dim=embedding_size, padding_idx=padding_idx
         )
 
         self.fc1 = Linear(in_features=embedding_size, out_features=vocabulary_size)
@@ -117,8 +115,7 @@ def main(num_epochs: int = 100, batch_size: int = 128):
     vectorizer = dataset.vectorizer
 
     classifier = CbowClassifier(
-        vocabulary_size=len(vectorizer.cbow_vocab),
-        embedding_size=args["embedding_size"],
+        vocabulary_size=len(vectorizer.cbow_vocab), embedding_size=args["embedding_size"],
     )
     classifier = classifier.to(args["device"])
 
